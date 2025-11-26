@@ -8,6 +8,34 @@
 # Logs all actions locally and ships the log to the log server.
 ###############################################
 
+# Parse command line arguments for logging options and date
+LOG_LEVEL="normal"  # Default log level
+MANIFEST_DATE="$(date +%Y%m%d)"  # Default to today
+
+# Process arguments
+for arg in "$@"; do
+  case $arg in
+    --quiet|-q)
+      LOG_LEVEL="quiet"
+      ;;
+    --verbose|-v)
+      LOG_LEVEL="verbose"
+      ;;
+    *)
+      # If it's not a logging option, treat it as the date
+      if [[ $arg =~ ^[0-9]{8}$ ]]; then
+        MANIFEST_DATE="$arg"
+      fi
+      ;;
+  esac
+done
+
+# Validate manifest date format
+if ! [[ "$MANIFEST_DATE" =~ ^[0-9]{8}$ ]]; then
+  echo "ERROR: Invalid date format for manifest (expected YYYYMMDD): $MANIFEST_DATE" >&2
+  exit 1
+fi
+
 # User-configurable variables (matching deploy_web.sh)
 FRONTEND_HOST="u1-phoenix"
 FRONTEND_USER="phoenix"
@@ -23,35 +51,65 @@ LOCAL_LOG_DIR="$SCRIPT_DIR/../_logs"
 REMOTE_HTML_DIR="/var/www/html"
 REMOTE_LOG_DIR="/home/naruhodo/Desktop/_logs"
 
-# Determine manifest date (default today). Optional first arg can be YYYYMMDD.
-MANIFEST_DATE="${1:-$(date +%Y%m%d)}"
-if ! [[ "$MANIFEST_DATE" =~ ^[0-9]{8}$ ]]; then
-  echo "ERROR: Invalid date format for manifest (expected YYYYMMDD): $MANIFEST_DATE" >&2
-  exit 1
-fi
-
 LOGFILE="$LOCAL_LOG_DIR/revert_web_${MANIFEST_DATE}.log"
 MANIFESTFILE="$LOCAL_LOG_DIR/manifest_web_${MANIFEST_DATE}.csv"
 
-# Helper: log to terminal + file (append)
+VERSION_LIMIT=3  # Maximum number of versions to keep
+
+# Helper: log to terminal + file (append) based on log level
 log() {
-  echo -- "$@" | tee -a "$LOGFILE"
+  case $LOG_LEVEL in
+    "quiet")
+      # Only log to file in quiet mode
+      echo -- "$@" >> "$LOGFILE"
+      ;;
+    "normal")
+      # Log to both terminal and file in normal mode, but greatly reduce verbosity
+      case $1 in
+        "  ✓ Successfully reverted updated item: "* | \
+        "  ✓ Successfully deleted created item: "* | \
+        *"Processing "* | \
+        *"Deleting newly created item"* | \
+        *"Restoring updated item"*)
+          # For detailed processing messages, only log to file in normal mode
+          echo -- "$@" >> "$LOGFILE"
+          ;;
+        *)
+          # For other messages (important ones), log to both terminal and file
+          echo -- "$@" | tee -a "$LOGFILE"
+          ;;
+      esac
+      ;;
+    "verbose")
+      # In verbose mode, add timestamp to the output
+      echo -- "[$(date '+%H:%M:%S')] $@" | tee -a "$LOGFILE"
+      ;;
+  esac
 }
 
-# Helper function: display progress bar
+# Helper function: display progress bar (only shown if not in quiet mode)
 show_progress() {
-    local current=$1
-    local total=$2
-    local width=50
-    local percentage=$(( current * 100 / total ))
-    local completed=$(( current * width / total ))
-    local remaining=$(( width - completed ))
+  case $LOG_LEVEL in
+    "quiet")
+      # Don't show progress in quiet mode
+      return
+      ;;
+    *)
+      # Show progress in normal and verbose modes
+      local current=$1
+      local total=$2
+      local width=50
+      local percentage=$(( current * 100 / total ))
+      local completed=$(( current * width / total ))
+      local remaining=$(( width - completed ))
 
-    # Print progress bar
-    printf "\rProgress: ["
-    printf "%*s" $completed | tr ' ' '#'
-    printf "%*s" $remaining | tr ' ' '-'
-    printf "] %d%% (%d/%d)" $percentage $current $total
+      # Print progress bar
+      printf "\rProgress: ["
+      printf "%*s" $completed | tr ' ' '#'
+      printf "%*s" $remaining | tr ' ' '-'
+      printf "] %d%% (%d/%d)" $percentage $current $total
+      ;;
+  esac
 }
 
 # Start
@@ -183,21 +241,41 @@ for item in "${ITEMS[@]}"; do
   fi
 
   if [[ "$action" == "updated" ]]; then
-    # Restore from versioned backup (v1)
+    # Restore from versioned backup with proper rotation: live->tmp, v1->live, v2->v1, etc.
     log "  ✓ Restoring updated item: $item from $item.v1"
-    ssh "$FRONTEND_USER@$FRONTEND_HOST" \
-      "set -e; \
-       # remove current item
-       rm -rf '$REMOTE_HTML_DIR/$item' 2>/dev/null || true; \
-       # ensure v1 exists before restore
-       if [ ! -e '$REMOTE_HTML_DIR/$item.v1' ]; then \
-         echo 'WARN: missing $item.v1, skipping restore'; \
-         exit 0; \
-       fi; \
-       # move v1 back to live
-       mv '$REMOTE_HTML_DIR/$item.v1' '$REMOTE_HTML_DIR/$item'; \
-       # set permissions to 755 after restoring
-       chmod 755 '$REMOTE_HTML_DIR/$item'" 2>&1 | tee -a "$LOGFILE"
+
+    # Safe revert process:
+    # 1. Rename live file to .tmp (preserve current version as backup)
+    # 2. Rename v1 to live (this is the version we're reverting to)
+    # 3. Rename v2 to v1, v3 to v2, etc. (shift all remaining backups down)
+
+    remote_cmd="set -e; "
+
+    # First, save the current live file to a temporary location (for safety)
+    remote_cmd="${remote_cmd}if [ -e '$REMOTE_HTML_DIR/$item' ]; then mv '$REMOTE_HTML_DIR/$item' '$REMOTE_HTML_DIR/$item.tmp'; fi; "
+
+    # Check that v1 backup exists before proceeding with the revert
+    remote_cmd="${remote_cmd}if [ ! -e '$REMOTE_HTML_DIR/$item.v1' ]; then echo 'WARN: missing $item.v1 backup, skipping restore'; exit 0; fi; "
+
+    # Rename v1 to live (perform the actual revert)
+    remote_cmd="${remote_cmd}mv '$REMOTE_HTML_DIR/$item.v1' '$REMOTE_HTML_DIR/$item'; "
+
+    # Now shift remaining versions down: v2->v1, v3->v2, etc.
+    # Process from lowest to highest to avoid overwriting issues
+    for ((i = 1; i <= VERSION_LIMIT - 1; i++)); do
+        j=$((i + 1))
+        remote_cmd="${remote_cmd}if [ -e '$REMOTE_HTML_DIR/$item.v$j' ]; then mv '$REMOTE_HTML_DIR/$item.v$j' '$REMOTE_HTML_DIR/$item.v$i'; fi; "
+    done
+
+    # Set permissions on the new live file
+    remote_cmd="${remote_cmd}chmod 755 '$REMOTE_HTML_DIR/$item';"
+
+    ssh "$FRONTEND_USER@$FRONTEND_HOST" "$remote_cmd" 2>&1 | tee -a "$LOGFILE"
+
+    # Now delete the temporary file (the previous live version) after the revert is complete
+    cleanup_cmd="rm -f '$REMOTE_HTML_DIR/$item.tmp';"
+    ssh "$FRONTEND_USER@$FRONTEND_HOST" "$cleanup_cmd" 2>&1 | tee -a "$LOGFILE"
+
     log "  ✓ Successfully reverted updated item: $item"
     continue
   fi

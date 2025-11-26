@@ -7,6 +7,21 @@
 # This script assumes that the front-end server is accessible via SSH.
 ###############################################
 
+# Parse command line arguments for logging options
+LOG_LEVEL="normal"  # Default log level
+for arg in "$@"; do
+  case $arg in
+    --quiet|-q)
+      LOG_LEVEL="quiet"
+      ;;
+    --verbose|-v)
+      LOG_LEVEL="verbose"
+      ;;
+    *)
+      # Ignore other arguments
+      ;;
+  esac
+done
 
 # User-configurable variables
 FRONTEND_HOST="u1-phoenix"
@@ -29,25 +44,60 @@ REMOTE_LOG_DIR="/home/naruhodo/Desktop/_logs"
 # Version rotation settings
 VERSION_LIMIT=3  # Maximum number of versions to keep
 
-# Helper function: log to terminal + logfile
+# Helper function: log to terminal + logfile based on log level
 log() {
-    echo -- "$@" | tee -a "$LOGFILE"
+  case $LOG_LEVEL in
+    "quiet")
+      # Only log to file in quiet mode
+      echo -- "$@" >> "$LOGFILE"
+      ;;
+    "normal")
+      # Log to both terminal and file in normal mode, but greatly reduce verbosity
+      case $1 in
+        "  ✓ Completed processing "* | \
+        *"Processing directory "* | \
+        *"Processing file "* | \
+        *"Copying "* | \
+        *"Setting permissions "*)
+          # For detailed processing messages, only log to file in normal mode
+          echo -- "$@" >> "$LOGFILE"
+          ;;
+        *)
+          # For other messages (important ones), log to both terminal and file
+          echo -- "$@" | tee -a "$LOGFILE"
+          ;;
+      esac
+      ;;
+    "verbose")
+      # In verbose mode, add timestamp to the output
+      echo -- "[$(date '+%H:%M:%S')] $@" | tee -a "$LOGFILE"
+      ;;
+  esac
 }
 
-# Helper function: display progress bar
+# Helper function: display progress bar (only shown if not in quiet mode)
 show_progress() {
-    local current=$1
-    local total=$2
-    local width=50
-    local percentage=$(( current * 100 / total ))
-    local completed=$(( current * width / total ))
-    local remaining=$(( width - completed ))
+  case $LOG_LEVEL in
+    "quiet")
+      # Don't show progress in quiet mode
+      return
+      ;;
+    *)
+      # Show progress in normal and verbose modes
+      local current=$1
+      local total=$2
+      local width=50
+      local percentage=$(( current * 100 / total ))
+      local completed=$(( current * width / total ))
+      local remaining=$(( width - completed ))
 
-    # Print progress bar
-    printf "\rProgress: ["
-    printf "%*s" $completed | tr ' ' '#'
-    printf "%*s" $remaining | tr ' ' '-'
-    printf "] %d%% (%d/%d)" $percentage $current $total
+      # Print progress bar
+      printf "\rProgress: ["
+      printf "%*s" $completed | tr ' ' '#'
+      printf "%*s" $remaining | tr ' ' '-'
+      printf "] %d%% (%d/%d)" $percentage $current $total
+      ;;
+  esac
 }
 
 ###############################################
