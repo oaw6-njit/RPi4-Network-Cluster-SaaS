@@ -20,6 +20,7 @@ LOCAL_HTML_DIR="$SCRIPT_DIR/../html"
 LOCAL_LOG_DIR="$SCRIPT_DIR/../_logs"
 
 LOGFILE="$LOCAL_LOG_DIR/deploy_web_$(date +%Y%m%d).log"
+MANIFESTFILE="$LOCAL_LOG_DIR/manifest_web_$(date +%Y%m%d).csv"
 
 REMOTE_HTML_DIR="/var/www/html"
 REMOTE_LOG_DIR="/home/naruhodo/Desktop/_logs"
@@ -57,6 +58,7 @@ log "Checking for existing items on the front-end server..."
 LOCAL_ITEMS=($(ls -1 "$LOCAL_HTML_DIR"))
 OVERWRITE_COUNT=0
 
+# Check how many exist on remote server
 for ITEM in "${LOCAL_ITEMS[@]}"; do
     if ssh "$FRONTEND_USER@$FRONTEND_HOST" "[ -e '$REMOTE_HTML_DIR/$ITEM' ]"; then
         ((OVERWRITE_COUNT++))
@@ -79,6 +81,18 @@ log "Deploying files..."
 
 for ITEM in "${LOCAL_ITEMS[@]}"; do
     log "Processing $ITEM..."
+    
+    # Determine item type and whether it already exists on remote for manifest
+    ITEM_PATH="$LOCAL_HTML_DIR/$ITEM"
+    if [ -d "$ITEM_PATH" ]; then TYPE="dir"; else TYPE="file"; fi
+    if ssh "$FRONTEND_USER@$FRONTEND_HOST" "[ -e '$REMOTE_HTML_DIR/$ITEM' ]"; then
+        ACTION="updated"
+        PREV_PATH="$REMOTE_HTML_DIR/$ITEM.old"
+    else
+        ACTION="created"
+        PREV_PATH=""
+    fi
+    echo "$ACTION,$ITEM,$TYPE,$PREV_PATH" >> "$MANIFESTFILE" # Log to manifest
     
     # If exists, rename old file
     ssh "$FRONTEND_USER@$FRONTEND_HOST" \
@@ -108,6 +122,14 @@ if scp "$LOGFILE" "$LOGSERVER_USER@$LOGSERVER_HOST:$REMOTE_LOG_DIR/"; then
     log "Log file transferred to log server successfully."
 else
     log "WARNING: Failed to transfer log file to log server!"
+fi
+
+# Also send the manifest to the log server
+log "Sending manifest to log server ($LOGSERVER_HOST)..."
+if scp "$MANIFESTFILE" "$LOGSERVER_USER@$LOGSERVER_HOST:$REMOTE_LOG_DIR/"; then
+    log "Manifest transferred to log server successfully."
+else
+    log "WARNING: Failed to transfer manifest to log server!"
 fi
 
 log "===== Web Deployment END at $(date) ====="
