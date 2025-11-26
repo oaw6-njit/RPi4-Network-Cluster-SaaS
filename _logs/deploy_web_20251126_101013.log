@@ -1,0 +1,7 @@
+===== Web Deployment START at Wed Nov 26 10:10:14 EST 2025 =====
+Testing SSH connection to u1-phoenix...
+SSH connection successful.
+Checking for existing items on the front-end server...
+Items found locally: 3
+Items that will be overwritten on server: 1
+Aborted by user.
