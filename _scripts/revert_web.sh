@@ -35,7 +35,7 @@ MANIFESTFILE="$LOCAL_LOG_DIR/manifest_web_${MANIFEST_DATE}.csv"
 
 # Helper: log to terminal + file (append)
 log() {
-  echo "$1" | tee -a "$LOGFILE"
+  echo -- "$@" | tee -a "$LOGFILE"
 }
 
 # Start
@@ -76,8 +76,14 @@ while IFS= read -r line; do
   TYPE_MAP["$item"]="$type"
   PREV_MAP["$item"]="$prev"
   # maintain seen order
-  if ! printf '%s
-' "${ITEMS[@]}" | grep -qx "$item"; then
+  seen=0
+  for existing_item in "${ITEMS[@]}"; do
+    if [[ "$existing_item" == "$item" ]]; then
+      seen=1
+      break
+    fi
+  done
+  if [[ $seen -eq 0 ]]; then
     ITEMS+=("$item")
   fi
 
@@ -102,7 +108,7 @@ fi
 
 # Show summary and confirm
 for item in "${ITEMS[@]}"; do
-  printf "- %s: %s (%s)\n" "$item" "${ACT_MAP[$item]}" "${TYPE_MAP[$item]}" | tee -a "$LOGFILE"
+  printf -- "- %s: %s (%s)\n" "$item" "${ACT_MAP[$item]}" "${TYPE_MAP[$item]}" | tee -a "$LOGFILE"
 done
 
 echo
@@ -138,7 +144,9 @@ for item in "${ITEMS[@]}"; do
          exit 0; \
        fi; \
        # move .old back to live
-       mv '$REMOTE_HTML_DIR/$item.old' '$REMOTE_HTML_DIR/$item'" 2>&1 | tee -a "$LOGFILE"
+       mv '$REMOTE_HTML_DIR/$item.old' '$REMOTE_HTML_DIR/$item'; \
+       # set permissions to 755 after restoring
+       chmod 755 '$REMOTE_HTML_DIR/$item'" 2>&1 | tee -a "$LOGFILE"
     log "Reverted updated item: $item"
     continue
   fi
