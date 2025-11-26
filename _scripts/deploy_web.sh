@@ -3,6 +3,7 @@
 ###############################################
 # deploy_web.sh - Deploy HTML files to front-end server
 # and log the deployment process.
+# Uses version rotation system (v1, v2, v3) to maintain backups.
 # This script assumes that the front-end server is accessible via SSH.
 ###############################################
 
@@ -24,6 +25,9 @@ MANIFESTFILE="$LOCAL_LOG_DIR/manifest_web_$(date +%Y%m%d).csv"
 
 REMOTE_HTML_DIR="/var/www/html"
 REMOTE_LOG_DIR="/home/naruhodo/Desktop/_logs"
+
+# Version rotation settings
+VERSION_LIMIT=3  # Maximum number of versions to keep
 
 # Helper function: log to terminal + logfile
 log() {
@@ -160,24 +164,41 @@ for ITEM in "${LOCAL_ITEMS[@]}"; do
 
     if ssh "$FRONTEND_USER@$FRONTEND_HOST" "[ -e '$REMOTE_HTML_DIR/$ITEM' ]"; then
         ACTION="updated"
-        PREV_PATH="$REMOTE_HTML_DIR/$ITEM.old"
+        # For manifest purposes, we'll record the file that will be backed up (current file)
+        PREV_PATH="$REMOTE_HTML_DIR/$ITEM"
         log "  $ITEM already exists on server, will be updated"
+
+        # Record the manifest entry before rotation, then update PREV_PATH after rotation
+        TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+        echo "$TIMESTAMP,$ACTION,$ITEM,$TYPE,$PREV_PATH" >> "$MANIFESTFILE" # Log to manifest
+
+        # Implement version rotation system
+        # Rotate existing versions (v3 becomes v4, v2 becomes v3, v1 becomes v2)
+        for ((i = VERSION_LIMIT - 1; i >= 1; i--)); do
+            j=$((i + 1))
+            ssh "$FRONTEND_USER@$FRONTEND_HOST" \
+            "if [ -e '$REMOTE_HTML_DIR/$ITEM.v$i' ]; then mv '$REMOTE_HTML_DIR/$ITEM.v$i' '$REMOTE_HTML_DIR/$ITEM.v$j'; fi" \
+            2>&1 | tee -a "$LOGFILE"
+        done
+
+        # Move current file to v1
+        ssh "$FRONTEND_USER@$FRONTEND_HOST" \
+        "if [ -e '$REMOTE_HTML_DIR/$ITEM' ]; then mv '$REMOTE_HTML_DIR/$ITEM' '$REMOTE_HTML_DIR/$ITEM.v1'; fi" \
+        2>&1 | tee -a "$LOGFILE"
+
+        log "  Renamed existing $ITEM to $ITEM.v1 and rotated older versions"
+
+        # Update PREV_PATH to reflect the new backup format
+        PREV_PATH="$REMOTE_HTML_DIR/$ITEM.v1"
+
     else
         ACTION="created"
         PREV_PATH=""
         log "  $ITEM is new, will be created"
-    fi
 
-    # Include timestamp in manifest entry with cleaner formatting
-    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "$TIMESTAMP,$ACTION,$ITEM,$TYPE,$PREV_PATH" >> "$MANIFESTFILE" # Log to manifest
-
-    # If exists, rename old file
-    if [ "$ACTION" = "updated" ]; then
-        log "  Renaming existing $ITEM to $ITEM.old"
-        ssh "$FRONTEND_USER@$FRONTEND_HOST" \
-        "if [ -e '$REMOTE_HTML_DIR/$ITEM' ]; then mv '$REMOTE_HTML_DIR/$ITEM' '$REMOTE_HTML_DIR/$ITEM.old'; fi" \
-        2>&1 | tee -a "$LOGFILE"
+        # Record the manifest entry for new files
+        TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+        echo "$TIMESTAMP,$ACTION,$ITEM,$TYPE,$PREV_PATH" >> "$MANIFESTFILE" # Log to manifest
     fi
 
     # Copy new file

@@ -4,7 +4,7 @@
 # revert_web.sh - Revert deployed HTML files on front-end server
 # Uses manifest_web_YYYYMMDD.csv to determine what to revert.
 # - For created items: delete current item.
-# - For updated items: delete current item, restore <item>.old
+# - For updated items: delete current item, restore <item>.v1
 # Logs all actions locally and ships the log to the log server.
 ###############################################
 
@@ -170,7 +170,7 @@ for item in "${ITEMS[@]}"; do
   log ""
   action="${ACT_MAP[$item]}"
   type="${TYPE_MAP[$item]}"
-  prev="${PREV_MAP[$item]}"   # expected to be /var/www/html/<item>.old for updated, empty for created
+  prev="${PREV_MAP[$item]}"   # expected to be /var/www/html/<item> (the original file before update), now revert to v1
   log "Processing $item (${CURRENT_ITEM}/${TOTAL_ITEMS}) - action: $action, type: $type"
 
   if [[ "$action" == "created" ]]; then
@@ -183,19 +183,19 @@ for item in "${ITEMS[@]}"; do
   fi
 
   if [[ "$action" == "updated" ]]; then
-    # Restore from .old backup (no numbered backups in the new deploy format)
-    log "  ✓ Restoring updated item: $item from $item.old"
+    # Restore from versioned backup (v1)
+    log "  ✓ Restoring updated item: $item from $item.v1"
     ssh "$FRONTEND_USER@$FRONTEND_HOST" \
       "set -e; \
        # remove current item
        rm -rf '$REMOTE_HTML_DIR/$item' 2>/dev/null || true; \
-       # ensure .old exists before restore
-       if [ ! -e '$REMOTE_HTML_DIR/$item.old' ]; then \
-         echo 'WARN: missing $item.old, skipping restore'; \
+       # ensure v1 exists before restore
+       if [ ! -e '$REMOTE_HTML_DIR/$item.v1' ]; then \
+         echo 'WARN: missing $item.v1, skipping restore'; \
          exit 0; \
        fi; \
-       # move .old back to live
-       mv '$REMOTE_HTML_DIR/$item.old' '$REMOTE_HTML_DIR/$item'; \
+       # move v1 back to live
+       mv '$REMOTE_HTML_DIR/$item.v1' '$REMOTE_HTML_DIR/$item'; \
        # set permissions to 755 after restoring
        chmod 755 '$REMOTE_HTML_DIR/$item'" 2>&1 | tee -a "$LOGFILE"
     log "  ✓ Successfully reverted updated item: $item"
