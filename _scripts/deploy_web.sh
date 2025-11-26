@@ -30,6 +30,22 @@ log() {
     echo -- "$@" | tee -a "$LOGFILE"
 }
 
+# Helper function: display progress bar
+show_progress() {
+    local current=$1
+    local total=$2
+    local width=50
+    local percentage=$(( current * 100 / total ))
+    local completed=$(( current * width / total ))
+    local remaining=$(( width - completed ))
+
+    # Print progress bar
+    printf "\rProgress: ["
+    printf "%*s" $completed | tr ' ' '#'
+    printf "%*s" $remaining | tr ' ' '-'
+    printf "] %d%% (%d/%d)" $percentage $current $total
+}
+
 ###############################################
 # Start
 ###############################################
@@ -104,10 +120,15 @@ CONFIRM=$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]') # normalize to lowercase
 # 3. Deploy items — rename remote file if exists
 ###############################################
 log "Deploying files..."
+TOTAL_ITEMS=${#LOCAL_ITEMS[@]}
+CURRENT_ITEM=0
 
 for ITEM in "${LOCAL_ITEMS[@]}"; do
+    ((CURRENT_ITEM++))
+    show_progress $CURRENT_ITEM $TOTAL_ITEMS
+
     log "Processing $ITEM..."
-    
+
     # Determine item type and whether it already exists on remote for manifest
     ITEM_PATH="$LOCAL_HTML_DIR/$ITEM"
     if [ -d "$ITEM_PATH" ]; then TYPE="dir"; else TYPE="file"; fi
@@ -121,22 +142,24 @@ for ITEM in "${LOCAL_ITEMS[@]}"; do
     # Include timestamp in manifest entry with cleaner formatting
     TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
     echo "$TIMESTAMP,$ACTION,$ITEM,$TYPE,$PREV_PATH" >> "$MANIFESTFILE" # Log to manifest
-    
+
     # If exists, rename old file
     ssh "$FRONTEND_USER@$FRONTEND_HOST" \
     "if [ -e '$REMOTE_HTML_DIR/$ITEM' ]; then mv '$REMOTE_HTML_DIR/$ITEM' '$REMOTE_HTML_DIR/$ITEM.old'; fi" \
     2>&1 | tee -a "$LOGFILE"
-    
+
     # Copy new file
     scp "$LOCAL_HTML_DIR/$ITEM" "$FRONTEND_USER@$FRONTEND_HOST:$REMOTE_HTML_DIR/" \
     2>&1 | tee -a "$LOGFILE"
-    
+
     # Set permissions to 755
     ssh "$FRONTEND_USER@$FRONTEND_HOST" \
     "chmod 755 '$REMOTE_HTML_DIR/$ITEM'" \
     2>&1 | tee -a "$LOGFILE"
 done
 
+# Clear progress bar and add completion message
+printf "\n"
 log "Deployment complete."
 
 ###############################################

@@ -38,6 +38,22 @@ log() {
   echo -- "$@" | tee -a "$LOGFILE"
 }
 
+# Helper function: display progress bar
+show_progress() {
+    local current=$1
+    local total=$2
+    local width=50
+    local percentage=$(( current * 100 / total ))
+    local completed=$(( current * width / total ))
+    local remaining=$(( width - completed ))
+
+    # Print progress bar
+    printf "\rProgress: ["
+    printf "%*s" $completed | tr ' ' '#'
+    printf "%*s" $remaining | tr ' ' '-'
+    printf "] %d%% (%d/%d)" $percentage $current $total
+}
+
 # Start
 mkdir -p "$LOCAL_LOG_DIR"
 log "===== Web Revert START for date $MANIFEST_DATE at $(date) ====="
@@ -117,8 +133,13 @@ CONFIRM=$(echo "$CONFIRM" | tr '[:upper:]' '[:lower:]')
 [[ "$CONFIRM" != "yes" && "$CONFIRM" != "y" ]] && log "Aborted by user." && exit 0
 
 log "Reverting files..."
+TOTAL_ITEMS=${#ITEMS[@]}
+CURRENT_ITEM=0
 
 for item in "${ITEMS[@]}"; do
+  ((CURRENT_ITEM++))
+  show_progress $CURRENT_ITEM $TOTAL_ITEMS
+
   action="${ACT_MAP[$item]}"
   type="${TYPE_MAP[$item]}"
   prev="${PREV_MAP[$item]}"   # expected to be /var/www/html/<item>.old for updated, empty for created
@@ -154,6 +175,8 @@ for item in "${ITEMS[@]}"; do
   log "Skipping $item: unsupported action '${action}'"
 done
 
+# Clear progress bar and add completion message
+printf "\n"
 log "Revert operations complete."
 
 # Send log to log server
