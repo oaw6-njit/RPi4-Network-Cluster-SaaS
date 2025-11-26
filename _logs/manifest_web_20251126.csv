@@ -1,3 +1,4 @@
-created,index.css,file,
-updated,index.html,file,/var/www/html/index.html.old
-created,test.php,file,
+timestamp,action,item,type,previous_path
+2025-11-26 13:19:39,created,index.css,file,
+2025-11-26 13:19:44,updated,index.html,file,/var/www/html/index.html.old
+2025-11-26 13:19:49,created,test.php,file,

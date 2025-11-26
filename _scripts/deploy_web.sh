@@ -37,6 +37,11 @@ mkdir -p "$LOCAL_LOG_DIR" # Ensure log directory exists
 
 log "===== Web Deployment START at $(date) ====="
 
+# Initialize manifest file with headers if it doesn't exist
+if [ ! -f "$MANIFESTFILE" ]; then
+    echo "timestamp,action,item,type,previous_path" > "$MANIFESTFILE"
+fi
+
 ###############################################
 # 1. Test SSH connection to front end server
 ###############################################
@@ -50,23 +55,44 @@ fi
 log "SSH connection successful."
 
 ###############################################
-# 2. Show number of items that will be overwritten
+# 2. Show which items will be created vs overwritten
 ###############################################
 log "Checking for existing items on the front-end server..."
 
 # Collect filenames in local HTML directory
 LOCAL_ITEMS=($(ls -1 "$LOCAL_HTML_DIR"))
-OVERWRITE_COUNT=0
+OVERWRITE_ITEMS=()
+CREATE_ITEMS=()
 
-# Check how many exist on remote server
+# Check each item and categorize as create or overwrite
 for ITEM in "${LOCAL_ITEMS[@]}"; do
     if ssh "$FRONTEND_USER@$FRONTEND_HOST" "[ -e '$REMOTE_HTML_DIR/$ITEM' ]"; then
-        ((OVERWRITE_COUNT++))
+        OVERWRITE_ITEMS+=("$ITEM")
+    else
+        CREATE_ITEMS+=("$ITEM")
     fi
 done
 
 log "Items found locally: ${#LOCAL_ITEMS[@]}"
-log "Items that will be overwritten on server: $OVERWRITE_COUNT"
+log "Items that will be overwritten on server: ${#OVERWRITE_ITEMS[@]}"
+if [ ${#OVERWRITE_ITEMS[@]} -gt 0 ]; then
+    log "  Files to be overwritten:"
+    for item in "${OVERWRITE_ITEMS[@]}"; do
+        log "    - $item"
+    done
+else
+    log "  No files will be overwritten."
+fi
+
+log "Items that will be created on server: ${#CREATE_ITEMS[@]}"
+if [ ${#CREATE_ITEMS[@]} -gt 0 ]; then
+    log "  Files to be created:"
+    for item in "${CREATE_ITEMS[@]}"; do
+        log "    - $item"
+    done
+else
+    log "  No new files will be created."
+fi
 
 echo
 read -p "Proceed with deployment? (yes/no): " CONFIRM
@@ -81,7 +107,7 @@ log "Deploying files..."
 
 for ITEM in "${LOCAL_ITEMS[@]}"; do
     log "Processing $ITEM..."
-    
+
     # Determine item type and whether it already exists on remote for manifest
     ITEM_PATH="$LOCAL_HTML_DIR/$ITEM"
     if [ -d "$ITEM_PATH" ]; then TYPE="dir"; else TYPE="file"; fi
@@ -92,8 +118,10 @@ for ITEM in "${LOCAL_ITEMS[@]}"; do
         ACTION="created"
         PREV_PATH=""
     fi
-    echo "$ACTION,$ITEM,$TYPE,$PREV_PATH" >> "$MANIFESTFILE" # Log to manifest
-    
+    # Include timestamp in manifest entry with cleaner formatting
+    TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "$TIMESTAMP,$ACTION,$ITEM,$TYPE,$PREV_PATH" >> "$MANIFESTFILE" # Log to manifest
+
     # If exists, rename old file
     ssh "$FRONTEND_USER@$FRONTEND_HOST" \
         "if [ -e '$REMOTE_HTML_DIR/$ITEM' ]; then mv '$REMOTE_HTML_DIR/$ITEM' '$REMOTE_HTML_DIR/$ITEM.old'; fi" \
